@@ -1,113 +1,143 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Web;
-using System.Web.SessionState;
-using Microsoft.Win32;                    
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using System.IO;
 
 namespace LandTitleRegistration.Controllers
 {
     /// <summary>
     /// Handles land title registration, search, and document retrieval.
+    /// Cloud-ready implementation using Azure services.
     /// </summary>
     public class TitleController
     {
         private readonly TitleService _service;
+        private readonly IConfiguration _configuration;
+        private readonly IDistributedCache _cache;
+        private readonly ILogger<TitleController> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        
-        private const string DocumentServiceUrl  = "http://docs.landtitle.internal:8090/fetch"; 
-        private const string NotificationService = "http://notify.landtitle.internal:7070/send"; 
-        private const string LegacySearchApi    = "http://10.0.2.15:9191/search/titles";       
+        // Externalized configuration - loaded from Azure App Configuration
+        private string DocumentServiceUrl => _configuration["ServiceUrls:DocumentService"];
+        private string NotificationService => _configuration["ServiceUrls:NotificationService"];
+        private string LegacySearchApi => _configuration["ServiceUrls:LegacySearchApi"];
 
-        
-        private const string ArchivePath   = @"C:\LandRegistry\Archives\";            
-        private const string TempExport    = @"C:\LandRegistry\Temp\exports\";        
-        private const string LogPath       = @"D:\Logs\LandTitle\registration.log";  
+        // Cloud storage paths - using Azure Blob Storage containers
+        private string ArchiveContainer => _configuration["StoragePaths:ArchiveContainer"] ?? "archives";
+        private string TempExportContainer => _configuration["StoragePaths:TempExportContainer"] ?? "exports";
+        private string LogContainer => _configuration["StoragePaths:LogContainer"] ?? "logs";
 
-        
-        private const int FixedPort = 8080;                                            
-
-        public TitleController()
+        public TitleController(
+            TitleService service,
+            IConfiguration configuration,
+            IDistributedCache cache,
+            ILogger<TitleController> logger,
+            IHttpClientFactory httpClientFactory)
         {
-            _service = new TitleService();
+            _service = service ?? throw new ArgumentNullException(nameof(service));
+            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         }
 
-        public Dictionary<string, object> RegisterTitle(
+        public async Task<Dictionary<string, object>> RegisterTitle(
             string ownerName, string parcelId,
             string propertyAddress, string titleType)
         {
-            var httpContext = HttpContext.Current;
+            // Store session data in distributed Redis cache instead of in-process session
+            var sessionData = new Dictionary<string, string>
+            {
+                ["CurrentOwner"] = ownerName,
+                ["ActiveParcel"] = parcelId,
+                ["RegistrationStep"] = "initiated"
+            };
 
-            
-            httpContext.Session["CurrentOwner"]     = ownerName;    
-            httpContext.Session["ActiveParcel"]     = parcelId;    
-            httpContext.Session["RegistrationStep"] = "initiated";
+            var sessionKey = $"session:{parcelId}";
+            await _cache.SetStringAsync(sessionKey, JsonConvert.SerializeObject(sessionData));
 
-            var result = _service.CreateRegistration(ownerName, parcelId, propertyAddress, titleType);
+            var result = await _service.CreateRegistration(ownerName, parcelId, propertyAddress, titleType);
 
-            
-            TitleCache.Store(parcelId, result);
+            // Store in distributed cache instead of static collection
+            var cacheKey = $"title:{parcelId}";
+            await _cache.SetStringAsync(cacheKey, JsonConvert.SerializeObject(result));
+
+            _logger.LogInformation("Title registered for parcel {ParcelId}", parcelId);
 
             return result;
         }
 
-        public Dictionary<string, object> GetTitleStatus(string parcelId)
+        public async Task<Dictionary<string, object>> GetTitleStatus(string parcelId)
         {
-            
-            var sessionOwner = HttpContext.Current.Session["CurrentOwner"]?.ToString(); 
+            // Retrieve session data from distributed cache
+            var sessionKey = $"session:{parcelId}";
+            var sessionDataJson = await _cache.GetStringAsync(sessionKey);
+            var sessionData = string.IsNullOrEmpty(sessionDataJson) 
+                ? new Dictionary<string, string>() 
+                : JsonConvert.DeserializeObject<Dictionary<string, string>>(sessionDataJson);
+
+            var sessionOwner = sessionData.ContainsKey("CurrentOwner") ? sessionData["CurrentOwner"] : null;
+
+            var details = await _service.GetTitleByParcel(parcelId);
 
             return new Dictionary<string, object>
             {
-                ["parcelId"]     = parcelId,
+                ["parcelId"] = parcelId,
                 ["sessionOwner"] = sessionOwner,
-                ["details"]      = _service.GetTitleByParcel(parcelId),
-                ["archivePath"]  = ArchivePath + parcelId + ".pdf" 
+                ["details"] = details,
+                ["archivePath"] = Path.Combine(ArchiveContainer, $"{parcelId}.pdf")
             };
         }
 
-        public string FetchDocumentFromService(string docId)
+        public async Task<string> FetchDocumentFromService(string docId)
         {
-           
-            using (var client = new HttpClient())                                       
+            // Use async HttpClient with IHttpClientFactory for proper connection pooling
+            var client = _httpClientFactory.CreateClient();
+            
+            try
             {
-                var response = client.GetAsync(DocumentServiceUrl + "?id=" + docId)    
-                                     .GetAwaiter().GetResult();
-                return response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                var response = await client.GetAsync($"{DocumentServiceUrl}?id={docId}");
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to fetch document {DocId}", docId);
+                throw;
             }
         }
 
         public string GetSystemArchivePath()
         {
-          
-            using (var key = Registry.LocalMachine.OpenSubKey(                         
-                @"SOFTWARE\LandTitleRegistry\Settings"))
+            // Replace Windows Registry access with Azure App Configuration
+            var archivePath = _configuration["StoragePaths:ArchiveContainer"];
+            
+            if (string.IsNullOrEmpty(archivePath))
             {
-                return key?.GetValue("ArchivePath")?.ToString() ?? ArchivePath;        
+                _logger.LogWarning("Archive path not configured, using default");
+                archivePath = "archives";
             }
+
+            return archivePath;
         }
 
-        public Dictionary<string, object> ExportTitleReport(string month, string year)
+        public async Task<Dictionary<string, object>> ExportTitleReport(string month, string year)
         {
-            string filePath = TempExport + $"report_{month}_{year}.xlsx";             
+            var fileName = $"report_{month}_{year}.xlsx";
+            var filePath = Path.Combine(TempExportContainer, fileName);
+            
+            var report = await _service.GenerateMonthlyReport(month, year);
+
             return new Dictionary<string, object>
             {
-                ["exportPath"] = filePath,                                              
-                ["port"]       = FixedPort,                                             
-                ["logPath"]    = LogPath,                                             
-                ["result"]     = _service.GenerateMonthlyReport(month, year)
+                ["exportPath"] = filePath,
+                ["result"] = report
             };
         }
-    }
-
-   
-    public static class TitleCache
-    {
-        private static readonly Dictionary<string, object> _cache                    
-            = new Dictionary<string, object>();
-
-        public static void Store(string key, object value) => _cache[key] = value;    
-        public static object Get(string key) => _cache.ContainsKey(key)
-            ? _cache[key] : null;
     }
 }
