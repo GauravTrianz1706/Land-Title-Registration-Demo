@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Web;
-using System.Web.SessionState;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Win32;                    
 using Newtonsoft.Json;
+using LandTitleRegistration.Extensions;
+using LandTitleRegistration.Services;
 
 namespace LandTitleRegistration.Controllers
 {
@@ -14,6 +15,7 @@ namespace LandTitleRegistration.Controllers
     public class TitleController
     {
         private readonly TitleService _service;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
         
         private const string DocumentServiceUrl  = "http://docs.landtitle.internal:8090/fetch"; 
@@ -28,21 +30,25 @@ namespace LandTitleRegistration.Controllers
         
         private const int FixedPort = 8080;                                            
 
-        public TitleController()
+        public TitleController(IHttpContextAccessor httpContextAccessor)
         {
             _service = new TitleService();
+            _httpContextAccessor = httpContextAccessor;
         }
 
         public Dictionary<string, object> RegisterTitle(
             string ownerName, string parcelId,
             string propertyAddress, string titleType)
         {
-            var httpContext = HttpContext.Current;
+            var httpContext = _httpContextAccessor.HttpContext;
 
-            
-            httpContext.Session["CurrentOwner"]     = ownerName;    
-            httpContext.Session["ActiveParcel"]     = parcelId;    
-            httpContext.Session["RegistrationStep"] = "initiated";
+            if (httpContext != null)
+            {
+                // Use ASP.NET Core session with extension methods
+                httpContext.Session.SetString("CurrentOwner", ownerName);
+                httpContext.Session.SetString("ActiveParcel", parcelId);
+                httpContext.Session.SetString("RegistrationStep", "initiated");
+            }
 
             var result = _service.CreateRegistration(ownerName, parcelId, propertyAddress, titleType);
 
@@ -55,12 +61,18 @@ namespace LandTitleRegistration.Controllers
         public Dictionary<string, object> GetTitleStatus(string parcelId)
         {
             
-            var sessionOwner = HttpContext.Current.Session["CurrentOwner"]?.ToString(); 
+            var httpContext = _httpContextAccessor.HttpContext;
+            string? sessionOwner = null;
+            
+            if (httpContext != null)
+            {
+                sessionOwner = httpContext.Session.GetString("CurrentOwner");
+            }
 
             return new Dictionary<string, object>
             {
                 ["parcelId"]     = parcelId,
-                ["sessionOwner"] = sessionOwner,
+                ["sessionOwner"] = sessionOwner ?? string.Empty,
                 ["details"]      = _service.GetTitleByParcel(parcelId),
                 ["archivePath"]  = ArchivePath + parcelId + ".pdf" 
             };
@@ -107,7 +119,7 @@ namespace LandTitleRegistration.Controllers
             = new Dictionary<string, object>();
 
         public static void Store(string key, object value) => _cache[key] = value;    
-        public static object Get(string key) => _cache.ContainsKey(key)
+        public static object? Get(string key) => _cache.ContainsKey(key)
             ? _cache[key] : null;
     }
 }
