@@ -1,45 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="14.0" DefaultTargets="Build"
-         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProductVersion>8.0.30703</ProductVersion>
-    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <!-- Upgraded from .NET Framework 4.6.1 (EOL) to .NET 8 LTS for cloud/Linux compatibility -->
+    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>LandTitleRegistration</RootNamespace>
     <AssemblyName>LandTitleRegistration</AssemblyName>
-
-    <!-- VIOLATION czr-csharp: Targets .NET Framework 4.6.1 — EOL since April 2022 -->
-    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
-
-    <FileAlignment>512</FileAlignment>
-    <NuGetPackageImportStamp />
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- VIOLATION CVE-2024-21907: Newtonsoft.Json 12.0.1 — Insecure deserialization
-         Allows attackers to execute arbitrary code via crafted JSON input -->
-    <PackageReference Include="Newtonsoft.Json" Version="12.0.1" />
+    <!-- ASP.NET Core Web API — replaces System.Web / IIS dependencies (cr-dotnet-0044) -->
+    <!-- Provides ILogger, IConfiguration, IHttpClientFactory, middleware pipeline -->
 
-    <!-- VIOLATION CVE-2018-1285: log4net 2.0.8 — XML external entity (XXE) injection
-         Allows attackers to read arbitrary files and perform SSRF via malicious config -->
-    <PackageReference Include="log4net" Version="2.0.8" />
+    <!-- Azure App Configuration — externalises URLs, paths, ports (cr-dotnet-0011, cr-dotnet-0017, cr-dotnet-0001) -->
+    <PackageReference Include="Microsoft.Azure.AppConfiguration.AspNetCore" Version="8.0.0" />
 
-    <!-- VIOLATION CVE-2023-29337: NuGet.Frameworks 6.0.0 — Path traversal vulnerability -->
-    <PackageReference Include="NuGet.Frameworks" Version="6.0.0" />
+    <!-- Azure Key Vault secrets provider — replaces hard-coded credentials (cr-dotnet-0009, cr-dotnet-0123) -->
+    <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.3.2" />
+    <PackageReference Include="Azure.Identity" Version="1.12.0" />
 
-    <!-- VIOLATION CVE-2021-26701: System.Text.Encodings.Web 5.0.0
-         ReDoS via specially crafted input in HTML encoder -->
-    <PackageReference Include="System.Text.Encodings.Web" Version="5.0.0" />
+    <!-- Azure Cache for Redis — replaces static collections and InProc session state
+         (cr-dotnet-0006, cr-dotnet-0045, cr-dotnet-0126) -->
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="8.0.0" />
 
-    <Reference Include="System" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Net.Http" />
-    <Reference Include="System.Web" />
-    <Reference Include="Microsoft.CSharp" />
+    <!-- Azure Monitor Application Insights — replaces log4net file appenders (cr-dotnet-0035) -->
+    <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.22.0" />
+
+    <!-- Microsoft.Data.SqlClient — modern, cross-platform SQL client (replaces System.Data.SqlClient) -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.1" />
+
+    <!-- Newtonsoft.Json upgraded to patched version (CVE-2024-21907 remediation) -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+
+    <!-- System.Text.Encodings.Web upgraded to patched version (CVE-2021-26701 remediation) -->
+    <PackageReference Include="System.Text.Encodings.Web" Version="8.0.0" />
+
+    <!-- NuGet.Frameworks removed (CVE-2023-29337) — not required at runtime -->
+    <!-- log4net removed — replaced by ILogger + Application Insights (cr-dotnet-0035) -->
+    <!-- Microsoft.Win32.Registry removed — replaced by Azure App Configuration (cr-dotnet-0040) -->
+    <!-- System.Web removed — replaced by ASP.NET Core middleware (cr-dotnet-0044) -->
   </ItemGroup>
 
   <ItemGroup>
