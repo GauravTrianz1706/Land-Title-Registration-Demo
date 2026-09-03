@@ -200,6 +200,111 @@ namespace LandTitleRegistration.Services
         }
 
         /// <summary>
+        /// Adds a nominee to an existing land title registration.
+        /// Validates TitleRef existence, enforces 2-nominee limit per title,
+        /// and verifies caller is the registered owner.
+        /// </summary>
+        public Dictionary<string, object> AddNominee(
+            string titleRef, string nomineeName, string relationship, string callerOwnerName)
+        {
+            using (var conn = new SqlConnection(ConnectionString))
+            {
+                conn.Open();
+
+                // Step 1: Validate TitleRef exists and get OwnerName
+                const string validateSql =
+                    "SELECT OwnerName FROM TitleRegistrations WHERE TitleRef = @TitleRef";
+                string registeredOwner = null;
+
+                using (var cmd = new SqlCommand(validateSql, conn))
+                {
+                    cmd.Parameters.Add("@TitleRef", SqlDbType.NVarChar).Value = titleRef;
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                            registeredOwner = reader.GetString(0);
+                    }
+                }
+
+                if (registeredOwner == null)
+                {
+                    _logger.LogWarning("Add nominee failed: TitleRef {TitleRef} not found", titleRef);
+                    return new Dictionary<string, object>
+                    {
+                        ["success"] = false,
+                        ["message"] = $"Invalid TitleRef: {titleRef} does not exist."
+                    };
+                }
+
+                // Step 2: Authorization check - verify caller is the registered owner
+                if (!string.Equals(registeredOwner, callerOwnerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning(
+                        "Add nominee failed: Unauthorized owner. Caller: {Caller}, Registered: {Registered}, TitleRef: {TitleRef}",
+                        callerOwnerName, registeredOwner, titleRef);
+                    return new Dictionary<string, object>
+                    {
+                        ["success"] = false,
+                        ["message"] = "Unauthorized: Only the registered owner can add nominees."
+                    };
+                }
+
+                // Step 3: Check existing nominee count (enforce 2-nominee limit)
+                const string countSql = "SELECT COUNT(*) FROM Nominees WHERE TitleRef = @TitleRef";
+                int existingCount = 0;
+
+                using (var cmd = new SqlCommand(countSql, conn))
+                {
+                    cmd.Parameters.Add("@TitleRef", SqlDbType.NVarChar).Value = titleRef;
+                    existingCount = (int)cmd.ExecuteScalar();
+                }
+
+                if (existingCount >= 2)
+                {
+                    _logger.LogWarning(
+                        "Add nominee failed: Maximum nominees reached for TitleRef {TitleRef}", titleRef);
+                    return new Dictionary<string, object>
+                    {
+                        ["success"] = false,
+                        ["message"] = $"Maximum nominees reached: TitleRef {titleRef} already has 2 nominees."
+                    };
+                }
+
+                // Step 4: Insert nominee
+                var createdDate = DateTimeOffset.UtcNow;
+                const string insertSql =
+                    "INSERT INTO Nominees (TitleRef, NomineeName, Relationship, CreatedDate) " +
+                    "VALUES (@TitleRef, @NomineeName, @Relationship, @CreatedDate); " +
+                    "SELECT CAST(SCOPE_IDENTITY() AS INT);";
+                int nomineeId;
+
+                using (var cmd = new SqlCommand(insertSql, conn))
+                {
+                    cmd.Parameters.Add("@TitleRef", SqlDbType.NVarChar).Value = titleRef;
+                    cmd.Parameters.Add("@NomineeName", SqlDbType.NVarChar).Value = nomineeName;
+                    cmd.Parameters.Add("@Relationship", SqlDbType.NVarChar).Value = relationship;
+                    cmd.Parameters.Add("@CreatedDate", SqlDbType.DateTimeOffset).Value = createdDate;
+                    nomineeId = (int)cmd.ExecuteScalar();
+                }
+
+                _logger.LogInformation(
+                    "Nominee added: NomineeId={NomineeId}, TitleRef={TitleRef}, NomineeName={NomineeName}",
+                    nomineeId, titleRef, nomineeName);
+
+                return new Dictionary<string, object>
+                {
+                    ["success"] = true,
+                    ["message"] = "Nominee added successfully.",
+                    ["nomineeId"] = nomineeId,
+                    ["titleRef"] = titleRef,
+                    ["nomineeName"] = nomineeName,
+                    ["relationship"] = relationship,
+                    ["createdDate"] = createdDate
+                };
+            }
+        }
+
+        /// <summary>
         /// Computes a SHA-256 hash (replaces deprecated SHA1CryptoServiceProvider).
         /// </summary>
         private static string ComputeSha256Hash(string input)

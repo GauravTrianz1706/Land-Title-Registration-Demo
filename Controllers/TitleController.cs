@@ -158,6 +158,28 @@ namespace LandTitleRegistration.Controllers
                 ["result"]     = _service.GenerateMonthlyReport(month, year)
             };
         }
+
+        [HttpPost("add-nominee")]
+        public async Task<Dictionary<string, object>> AddNominee(
+            string titleRef, string nomineeName, string relationship)
+        {
+            // Retrieve caller identity from session cache
+            // (follows existing pattern of session state stored in IDistributedCache)
+            var callerOwnerName = await _cache.GetStringAsync("session:CurrentOwner:" + titleRef);
+
+            if (string.IsNullOrEmpty(callerOwnerName))
+            {
+                _logger.LogWarning(
+                    "Add nominee failed: No session owner found for TitleRef {TitleRef}", titleRef);
+                return new Dictionary<string, object>
+                {
+                    ["success"] = false,
+                    ["message"] = "Session expired or invalid. Please authenticate as the registered owner."
+                };
+            }
+
+            return _service.AddNominee(titleRef, nomineeName, relationship, callerOwnerName);
+        }
     }
 
     // TitleCache static class removed — replaced by Azure Cache for Redis (IDistributedCache)
